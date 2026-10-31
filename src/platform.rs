@@ -3148,6 +3148,9 @@ pub mod mouse_inject {
     }
 
     pub fn char_to_vk(ch: char) -> u16 {
+        if let Some(vk) = crate::platform::latin_vk(ch) {
+            return vk;
+        }
         match ch {
             '\x1b' => 0x1B,  // VK_ESCAPE — VkKeyScanW returns -1 for non-printable
             '\r'   => 0x0D,  // VK_RETURN
@@ -6830,6 +6833,14 @@ mod tests_issue761_server_console_detach;
 #[cfg(windows)]
 #[path = "../tests-rs/test_issue265_argv_backslash.rs"]
 mod tests_issue265_argv_backslash;
+
+/// The virtual key of an ASCII letter or digit, which names that key in every
+/// keyboard layout (VK_A is 0x41, VK_0 is 0x30). VkKeyScanW answers from the
+/// layout in use, and a Cyrillic layout has no key for `a`, so a Ctrl+A sent
+/// to a pane while Russian was active went out with virtual key 0.
+pub(crate) fn latin_vk(ch: char) -> Option<u16> {
+    (ch.is_ascii_alphanumeric()).then(|| ch.to_ascii_uppercase() as u16)
+}
 
 #[cfg(test)]
 #[cfg(windows)]
