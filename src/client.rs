@@ -672,6 +672,41 @@ pub(crate) fn send_key_line(name: &str) -> String {
     format!("send-key {}\n", crate::util::quote_arg_if_needed(name))
 }
 
+/// The first binding a key reaches: in each of `tables` for the first of
+/// `keys`, then for the next. `keys` is the key as typed, then the
+/// Latin key a Ctrl + non Latin letter is typed on, so the exact name always
+/// wins. `entry` gives a binding's table and key, or `None` for a binding
+/// that must not fire.
+pub(crate) fn find_binding<'a, B>(
+    bindings: &'a [B],
+    tables: &[&str],
+    keys: &[(KeyCode, KeyModifiers)],
+    entry: impl Fn(&B) -> Option<(&str, &str)>,
+) -> Option<&'a B> {
+    keys.iter().find_map(|&key| {
+        let key = normalize_key_for_binding(key);
+        tables.iter().find_map(|table| {
+            bindings.iter().find(|b| {
+                entry(b).is_some_and(|(t, k)| {
+                    t == *table && parse_key_string(k).is_some_and(|k| normalize_key_for_binding(k) == key)
+                })
+            })
+        })
+    })
+}
+
+/// Whether a Ctrl + non Latin letter arms the prefix: its Latin key
+/// is the prefix's key (Ctrl+и on Russian is typed on the B key, so it is
+/// C-b), and the key as typed is not bound in the root table, where its own
+/// name wins.
+pub(crate) fn latin_arms_prefix(
+    latin: Option<(KeyCode, KeyModifiers)>,
+    prefixes: [Option<(KeyCode, KeyModifiers)>; 2],
+    typed_is_bound: bool,
+) -> bool {
+    !typed_is_bound && latin.is_some_and(|l| prefixes.contains(&Some(l)))
+}
+
 /// The `send-key` name for an Escape key event (issue #766).
 ///
 /// A front end that writes `ESC ESC` in one write reaches the client, on the
@@ -5299,11 +5334,24 @@ pub fn run_remote(terminal: &mut Terminal<crate::platform::PsmuxBackend>, input:
                                 }
                             }
                         }
+                        // The key as typed, then the Latin key a Ctrl +
+                        // non Latin letter is typed on (Ctrl+м on Russian is
+                        // the V key). Every key table lookup below tries them
+                        // in this order, as the #616 confirm prompt does.
+                        let typed = (key.code, key.modifiers);
+                        let lookup_keys: Vec<(KeyCode, KeyModifiers)> =
+                            std::iter::once(typed).chain(crate::config::latin_ctrl_key(typed)).collect();
                         // Dynamic prefix key check (default: Ctrl+B, configurable via .psmux.conf)
                         let is_prefix = prefix_key == Some((key.code, key.modifiers))
                             || prefix_raw_char.map_or(false, |c| matches!(key.code, KeyCode::Char(ch) if ch == c))
                             || prefix2_key.map_or(false, |p2| (key.code, key.modifiers) == p2)
-                            || prefix2_raw_char.map_or(false, |c| matches!(key.code, KeyCode::Char(ch) if ch == c));
+                            || prefix2_raw_char.map_or(false, |c| matches!(key.code, KeyCode::Char(ch) if ch == c))
+                            || (lookup_keys.len() > 1 && latin_arms_prefix(
+                                lookup_keys.get(1).copied(),
+                                [prefix_key, prefix2_key],
+                                find_binding(&synced_bindings, &[key_table_sync.default_table()], &lookup_keys[..1],
+                                    |b| Some((b.t.as_str(), b.k.as_str()))).is_some(),
+                            ));
 
                         // Expire repeat-mode prefix if repeat-time has elapsed.
                         // This ensures keys are forwarded to the PTY rather than
@@ -5678,17 +5726,15 @@ pub fn run_remote(terminal: &mut Terminal<crate::platform::PsmuxBackend>, input:
                         // the root table, so `key_table_latch.is_none()` gates
                         // this arm and lets the dispatch arm below run instead.
                         else if !prefix_armed && key_table_latch.is_none() && !command_input && !renaming && !srv_prompt_open && !tree_chooser && !buffer_chooser && !session_chooser && !keys_viewer && confirm_cmd.is_none() && {
-                            let key_tuple = normalize_key_for_binding((key.code, key.modifiers));
-                            synced_bindings.iter().any(|b| {
-                                b.t == key_table_sync.default_table() && parse_key_string(&b.k).map_or(false, |k| normalize_key_for_binding(k) == key_tuple)
+                            find_binding(&synced_bindings, &[key_table_sync.default_table()], &lookup_keys, |b| {
                                 // Skip scroll-triggered copy mode bindings when option is off (#284)
-                                && !(!scroll_enter_copy_mode && crate::copy_mode::is_page_up_copy_mode_command(&b.c))
-                            })
+                                (scroll_enter_copy_mode || !crate::copy_mode::is_page_up_copy_mode_command(&b.c))
+                                    .then(|| (b.t.as_str(), b.k.as_str()))
+                            }).is_some()
                         } {
-                            let key_tuple = normalize_key_for_binding((key.code, key.modifiers));
-                            if let Some(entry) = synced_bindings.iter().find(|b| {
-                                b.t == key_table_sync.default_table() && parse_key_string(&b.k).map_or(false, |k| normalize_key_for_binding(k) == key_tuple)
-                                && !(!scroll_enter_copy_mode && crate::copy_mode::is_page_up_copy_mode_command(&b.c))
+                            if let Some(entry) = find_binding(&synced_bindings, &[key_table_sync.default_table()], &lookup_keys, |b| {
+                                (scroll_enter_copy_mode || !crate::copy_mode::is_page_up_copy_mode_command(&b.c))
+                                    .then(|| (b.t.as_str(), b.k.as_str()))
                             }) {
                                 if entry.c == "detach-client" || entry.c == "detach" {
                                     quit = true;
@@ -5761,19 +5807,16 @@ pub fn run_remote(terminal: &mut Terminal<crate::platform::PsmuxBackend>, input:
                             }
 
                             // Check synced bindings from server (includes defaults from PREFIX_DEFAULTS)
-                            let key_tuple = normalize_key_for_binding((key.code, key.modifiers));
-                            let mut user_binding = synced_bindings.iter().find(|b| {
-                                b.t == active_table && parse_key_string(&b.k).map_or(false, |k| normalize_key_for_binding(k) == key_tuple)
-                            });
                             // tmux: a key with no binding in a custom table
                             // falls back to the default table (root unless
                             // `key-table` is set) before being swallowed
                             // ("trying in root table").
-                            if user_binding.is_none() && latched_table.is_some() {
-                                user_binding = synced_bindings.iter().find(|b| {
-                                    b.t == key_table_sync.default_table() && parse_key_string(&b.k).map_or(false, |k| normalize_key_for_binding(k) == key_tuple)
-                                });
+                            let mut tables = vec![active_table];
+                            if latched_table.is_some() {
+                                tables.push(key_table_sync.default_table());
                             }
+                            let user_binding = find_binding(&synced_bindings, &tables, &lookup_keys,
+                                |b| Some((b.t.as_str(), b.k.as_str())));
                             if let Some(entry) = user_binding {
                                 // Dispatch binding (handles both defaults and user overrides).
                                 // Client-side UI commands need special handling here since

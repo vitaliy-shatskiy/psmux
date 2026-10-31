@@ -242,7 +242,7 @@ fn chars_match(a: char, b: char) -> bool {
 /// when it has no key for `typed`, the other installed layouts are tried,
 /// and the first that has one decides.
 #[cfg(windows)]
-fn layout_virtual_key(typed: char) -> Option<u16> {
+pub(crate) fn layout_virtual_key(typed: char) -> Option<u16> {
     #[link(name = "user32")]
     extern "system" {
         fn GetForegroundWindow() -> isize;
@@ -285,7 +285,7 @@ fn layout_virtual_key(typed: char) -> Option<u16> {
 }
 
 #[cfg(not(windows))]
-fn layout_virtual_key(_typed: char) -> Option<u16> {
+pub(crate) fn layout_virtual_key(_typed: char) -> Option<u16> {
     None
 }
 
