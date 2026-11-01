@@ -4,6 +4,7 @@ pub(crate) mod option_catalog;
 pub(crate) mod connection;
 pub(crate) mod temp_target;
 pub(crate) mod source_job;
+pub(crate) mod destroy_unattached;
 // #798: the shared server's only entry, behind PSMUX_SERVER_MODE.
 pub(crate) mod shared;
 
@@ -1943,6 +1944,25 @@ fn rekey_session_guard(guard: &mut Option<crate::platform::SessionMutex>, new_ba
     }
 }
 
+/// destroy-unattached: remove the session's registry files, kill every pane
+/// and exit the server.
+fn destroy_unattached_exit(app: &mut AppState, session_guard: &mut Option<crate::platform::SessionMutex>) -> ! {
+    if !app.forwarded_panes.is_empty() { crate::cross_session_server::become_forward_host(app, session_guard.take()); }
+    let regpath = crate::paths::port_file(&app.port_file_base());
+    let keypath = crate::paths::key_file(&app.port_file_base());
+    let _ = std::fs::remove_file(&regpath);
+    let _ = std::fs::remove_file(&keypath);
+    crate::session::remove_session_id_file(&app.port_file_base());
+    crate::types::shutdown_persistent_streams();
+    tree::kill_all_children_batch(&mut app.windows);
+    app.warm_pane.kill_all();
+    // ...and the spares whose spawn is still in flight, which the pool
+    // cannot see because they have not reached AppState yet (#686).
+    crate::warm_pane_sync::reap_inflight_spares();
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    std::process::exit(0);
+}
+
 /// Everything the "NC" decision is allowed to look at. See [`nc_allowed`].
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct NcInputs {
@@ -2922,6 +2942,12 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
     // those may receive the "NC" shortcut. Cleared on ClientDetach so this
     // does not grow unbounded across client reconnects.
     let mut dump_state_seen_full: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    // destroy-unattached: each attached client's pid and creation time, read
+    // at attach, and the last lost client whose process the session waits
+    // for (see destroy_unattached.rs), re-checked every 250ms.
+    let mut client_identities: std::collections::HashMap<u64, destroy_unattached::ClientIdentity> = std::collections::HashMap::new();
+    let mut unattached_wait: Option<destroy_unattached::ClientIdentity> = None;
+    let mut last_unattached_check = Instant::now();
     // Cached metadata JSON — windows/tree/prefix change only on structural
     // mutations, so we rebuild them lazily via `meta_dirty`.
     let mut meta_dirty = true;
@@ -3334,6 +3360,17 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
         {
             state_dirty = true;
             meta_dirty = true;
+        }
+        // destroy-unattached waiting on a lost client's process: a reconnect
+        // (or the option turned off) ends the wait, the process exit ends the
+        // session.
+        if unattached_wait.is_some() && last_unattached_check.elapsed() >= Duration::from_millis(250) {
+            last_unattached_check = Instant::now();
+            match destroy_unattached::decide(app.attached_clients, app.destroy_unattached, unattached_wait, destroy_unattached::probe_process) {
+                destroy_unattached::Unattached::Keep => unattached_wait = None,
+                destroy_unattached::Unattached::Wait => {}
+                destroy_unattached::Unattached::DestroyNow => destroy_unattached_exit(&mut app, &mut session_guard),
+            }
         }
         if last_alert_check.elapsed() >= Duration::from_secs(1) {
             last_alert_check = Instant::now();
@@ -4034,6 +4071,9 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                     // operation. A duplicate attach for the same connection
                     // must not leave the session permanently ghost-attached.
                     if app.register_client_with_pid(cid, false, pid) {
+                        if let Some(identity) = destroy_unattached::identity_at_attach(pid) {
+                            client_identities.insert(cid, identity);
+                        }
                         if let Some(features) = features {
                             app.client_registry.get_mut(&cid).unwrap().termfeatures = features;
                         }
@@ -4074,6 +4114,7 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                     // reconnect (new TCP connection, same or different
                     // client_id namespace) never wrongly inherits it.
                     dump_state_seen_full.remove(&cid);
+                    let identity = client_identities.remove(&cid);
                     // Route through the idempotent reaper so a duplicate detach
                     // for one `cid` (e.g. reader-EOF and writer-teardown both
                     // observing the same dead connection) cannot over-decrement
@@ -4085,23 +4126,17 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                             resize_all_panes(&mut app);
                         }
                         hook_event = Some("client-detached");
-                        if app.attached_clients == 0 && app.destroy_unattached {
-                            if !app.forwarded_panes.is_empty() { crate::cross_session_server::become_forward_host(&mut app, session_guard.take()); }
-                            let regpath = crate::paths::port_file(&app.port_file_base());
-                            let keypath = crate::paths::key_file(&app.port_file_base());
-                            let _ = std::fs::remove_file(&regpath);
-                            let _ = std::fs::remove_file(&keypath);
-                            crate::session::remove_session_id_file(&app.port_file_base());
-                            crate::types::shutdown_persistent_streams();
-                            tree::kill_all_children_batch(&mut app.windows);
-                            app.warm_pane.kill_all();
-                            // ...and the spares whose spawn is still in flight, which the pool
-                            // cannot see because they have not reached AppState yet. Without this,
-                            // a teardown during a surge left the shells born a few milliseconds
-                            // later parented to a dead psmux, idle at a prompt forever (#686).
-                            crate::warm_pane_sync::reap_inflight_spares();
-                            std::thread::sleep(std::time::Duration::from_millis(10));
-                            std::process::exit(0);
+                        // A connection that ended is not yet a client that left:
+                        // the writer drops one that stopped reading for 5 s and
+                        // it reconnects. While its process runs, wait for it.
+                        match destroy_unattached::decide(app.attached_clients, app.destroy_unattached, identity, destroy_unattached::probe_process) {
+                            destroy_unattached::Unattached::DestroyNow => destroy_unattached_exit(&mut app, &mut session_guard),
+                            destroy_unattached::Unattached::Wait => {
+                                crate::debug_log::server_log("destroy-unattached", &format!("client {cid}: connection gone, process {} still runs, waiting for it", identity.map_or(0, |i| i.pid)));
+                                unattached_wait = identity;
+                                last_unattached_check = Instant::now();
+                            }
+                            destroy_unattached::Unattached::Keep => {}
                         }
                     }
                 }
