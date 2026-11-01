@@ -1250,7 +1250,7 @@ set -g destroy-unattached on
 set -g exit-empty on
 ```
 
-With `destroy-unattached on`, the server process terminates as soon as the last client detaches. This is useful for single-use sessions.
+With `destroy-unattached on`, the server process terminates as soon as the last client detaches. This is useful for single-use sessions. A client the server drops because it stopped reading (a frozen terminal or PC, 5 s write timeout) has not detached: while its process runs the session waits for it to reconnect, and it ends once that process exits.
 
 With `exit-empty off`, an empty server stays alive. The tmux idiom for holding a private server before it has a session works as it does in tmux:
 
