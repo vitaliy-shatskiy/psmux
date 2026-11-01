@@ -311,9 +311,11 @@ impl ConsoleTap {
         // makes the Alt keypress with VkKeyScanW, which fails on that layout,
         // and its LOBYTE/HIBYTE split of the 0xFFFF failure is never -1, so the
         // record carries vk 0xFF, scan code 0 and every KEYSCAN modifier
-        // (SHIFT | LEFT_CTRL | LEFT_ALT). crossterm read it as C-M-v. A key a
-        // keyboard sends always has a scan code, so only that synthetic record
-        // matches. It goes on as Alt plus the character, press and release.
+        // (SHIFT | LEFT_CTRL | LEFT_ALT). crossterm read it as C-M-v. vk 0xFF
+        // and scan code 0 together identify that record: a physical key has a
+        // scan code, and injected text (SendInput KEYEVENTF_UNICODE, the touch
+        // keyboard, an IME) arrives as VK_PACKET 0xE7. It goes on as Alt plus
+        // the character, press and release.
         if esc_char_vkkeyscan_failure(&rec) {
             if rec.key_down {
                 self.high = None;
@@ -418,7 +420,7 @@ thread_local! {
 }
 
 /// Consume the records at the head of the console input buffer that crossterm
-/// would lose or misread (the four kinds in the module notes), and return the
+/// would lose or misread (the kinds in the module notes), and return the
 /// first event they complete. Returns `None` as soon as the head is a record
 /// crossterm should read, or the buffer is empty.
 ///

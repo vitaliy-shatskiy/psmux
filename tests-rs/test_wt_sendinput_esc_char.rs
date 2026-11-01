@@ -68,3 +68,48 @@ fn russian_ctrl_v_is_still_ctrl_v() {
     let mut tap = ConsoleTap::new();
     assert_eq!(tap.classify_with(rec(true, 0x56, 0x2F, 0x16, LCTRL), russian), key('v', KeyModifiers::CONTROL, KeyEventKind::Press));
 }
+
+#[test]
+fn a_missing_modifier_bit_is_not_the_vkkeyscan_failure() {
+    let mut tap = ConsoleTap::new();
+    for cs in [SHIFT | LALT, SHIFT | LCTRL, LCTRL | LALT] {
+        assert_eq!(tap.classify_with(rec(true, 0xFF, 0, b'v' as u16, cs), russian), Verdict::NotOurs, "cs={cs:#x}");
+    }
+}
+
+#[test]
+fn a_control_character_or_del_is_not_taken() {
+    let mut tap = ConsoleTap::new();
+    let cs = SHIFT | LCTRL | LALT;
+    assert_eq!(tap.classify_with(rec(true, 0xFF, 0, 0x01, cs), russian), Verdict::NotOurs);
+    assert_eq!(tap.classify_with(rec(true, 0xFF, 0, 0x7F, cs), russian), Verdict::NotOurs);
+}
+
+#[test]
+fn punctuation_and_non_ascii_go_on_with_alt() {
+    let mut tap = ConsoleTap::new();
+    let cs = SHIFT | LCTRL | LALT;
+    // ESC @ on Russian: no key types '@' there.
+    assert_eq!(tap.classify_with(rec(true, 0xFF, 0, b'@' as u16, cs), russian), key('@', KeyModifiers::ALT, KeyEventKind::Press));
+    assert_eq!(tap.classify_with(rec(true, 0xFF, 0, 'é' as u16, cs), russian), key('é', KeyModifiers::ALT, KeyEventKind::Press));
+}
+
+#[test]
+fn only_the_press_drops_a_pending_high_surrogate() {
+    let mut tap = ConsoleTap::new();
+    let cs = SHIFT | LCTRL | LALT;
+    let smile = Verdict::Consumed(Some(Event::Key(KeyEvent {
+        code: KeyCode::Char('😊'),
+        modifiers: KeyModifiers::empty(),
+        kind: KeyEventKind::Press,
+        state: KeyEventState::empty(),
+    })));
+    // A release between the halves leaves the pair whole.
+    assert_eq!(tap.classify_with(rec(true, 0, 0, 0xD83D, 0), russian), Verdict::Consumed(None));
+    assert_eq!(tap.classify_with(rec(false, 0xFF, 0, b'v' as u16, cs), russian), key('v', KeyModifiers::ALT, KeyEventKind::Release));
+    assert_eq!(tap.classify_with(rec(true, 0, 0, 0xDE0A, 0), russian), smile);
+    // A press breaks it.
+    assert_eq!(tap.classify_with(rec(true, 0, 0, 0xD83D, 0), russian), Verdict::Consumed(None));
+    assert_eq!(tap.classify_with(rec(true, 0xFF, 0, b'v' as u16, cs), russian), key('v', KeyModifiers::ALT, KeyEventKind::Press));
+    assert_eq!(tap.classify_with(rec(true, 0, 0, 0xDE0A, 0), russian), Verdict::Consumed(None));
+}
