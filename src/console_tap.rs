@@ -46,6 +46,10 @@
 //!    is Ctrl+м), which has no control code, so the key was lost. It is decoded
 //!    here as Ctrl plus the Latin letter the virtual key names. A Latin layout
 //!    stays crossterm's.
+//! 6. ESC + a character written into the console on a non Latin layout
+//!    (Windows Terminal `sendInput` "\u001bv"): conhost's failed VkKeyScanW
+//!    gives vk 0xFF, scan code 0 and SHIFT | LEFT_CTRL | LEFT_ALT, which
+//!    crossterm reads as C-M-v. It is decoded here as Alt plus the character.
 //!
 //! The seam: every read on the console route goes through
 //! `crossterm::event::poll(Duration::ZERO)`, and with a zero timeout crossterm
@@ -69,6 +73,7 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, Ke
 pub(crate) struct KeyRec {
     pub key_down: bool,
     pub vk: u16,
+    pub scan: u16,
     pub u_char: u16,
     pub ctrl_state: u32,
 }
@@ -153,6 +158,15 @@ fn altgr_ascii_letter(rec: &KeyRec) -> bool {
         && rec.ctrl_state & RIGHT_ALT_PRESSED != 0
         && rec.ctrl_state & LEFT_ALT_PRESSED == 0
         && (b'a' as u16..=b'z' as u16).contains(&rec.u_char)
+}
+
+/// The record conhost writes for ESC + a printable character when VkKeyScanW
+/// has no key for it on the active layout: vk 0xFF, scan code 0 (MapVirtualKey
+/// of 0xFF), SHIFT, LEFT_CTRL and LEFT_ALT all set. Surrogate halves and
+/// control characters are decided before this check.
+fn esc_char_vkkeyscan_failure(rec: &KeyRec) -> bool {
+    const ALL: u32 = SHIFT_PRESSED | LEFT_CTRL_PRESSED | LEFT_ALT_PRESSED;
+    rec.vk == 0xFF && rec.scan == 0 && rec.ctrl_state & ALL == ALL && rec.u_char > 0x1F && rec.u_char != 0x7F
 }
 
 /// Ctrl held without Alt on a letter key (VK_A to VK_Z) that crossterm would
@@ -292,6 +306,28 @@ impl ConsoleTap {
             })));
         }
 
+        // ESC + a character written into the console (Windows Terminal
+        // `sendInput` "\u001bv") while a non Latin layout is active. conhost
+        // makes the Alt keypress with VkKeyScanW, which fails on that layout,
+        // and its LOBYTE/HIBYTE split of the 0xFFFF failure is never -1, so the
+        // record carries vk 0xFF, scan code 0 and every KEYSCAN modifier
+        // (SHIFT | LEFT_CTRL | LEFT_ALT). crossterm read it as C-M-v. A key a
+        // keyboard sends always has a scan code, so only that synthetic record
+        // matches. It goes on as Alt plus the character, press and release.
+        if esc_char_vkkeyscan_failure(&rec) {
+            if rec.key_down {
+                self.high = None;
+            }
+            return Verdict::Consumed(char::from_u32(u as u32).map(|ch| {
+                Event::Key(KeyEvent {
+                    code: KeyCode::Char(ch),
+                    modifiers: KeyModifiers::ALT,
+                    kind: if rec.key_down { KeyEventKind::Press } else { KeyEventKind::Release },
+                    state: KeyEventState::empty(),
+                })
+            }));
+        }
+
         // Ctrl + a letter key on a non Latin layout. crossterm maps the
         // control character in uChar back to a letter with ToUnicodeEx on the
         // active layout, so Ctrl+V on Russian or Ukrainian arrives as Ctrl+м,
@@ -406,6 +442,7 @@ pub(crate) fn take_head() -> Option<Event> {
                 Some(KeyRec {
                     key_down: k.key_down != 0,
                     vk: k.virtual_key_code,
+                    scan: k.virtual_scan_code,
                     u_char: k.u_char,
                     ctrl_state: k.control_key_state,
                 })
@@ -424,8 +461,8 @@ pub(crate) fn take_head() -> Option<Event> {
                         crate::debug_log::input_log(
                             "tap",
                             &format!(
-                                "{} vk=0x{:02X} uChar=0x{:04X} -> {:?}",
-                                if k.key_down { "down" } else { "up" }, k.vk, k.u_char, ev
+                                "{} vk=0x{:02X} sc=0x{:02X} uChar=0x{:04X} cs=0x{:04X} -> {:?}",
+                                if k.key_down { "down" } else { "up" }, k.vk, k.scan, k.u_char, k.ctrl_state, ev
                             ),
                         );
                     }
@@ -456,3 +493,7 @@ mod tests_altgr_letter_console_tap;
 #[cfg(test)]
 #[path = "../tests-rs/test_ctrl_letter_non_latin_layout.rs"]
 mod tests_ctrl_letter_non_latin_layout;
+
+#[cfg(test)]
+#[path = "../tests-rs/test_wt_sendinput_esc_char.rs"]
+mod tests_wt_sendinput_esc_char;

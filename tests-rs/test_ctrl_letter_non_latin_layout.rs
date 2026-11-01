@@ -20,7 +20,7 @@ const SHIFT: u32 = 0x0010;
 const CAPS: u32 = 0x0080;
 
 fn rec(down: bool, vk: u16, u: u16, ctrl_state: u32) -> Option<KeyRec> {
-    Some(KeyRec { key_down: down, vk, u_char: u, ctrl_state })
+    Some(KeyRec { key_down: down, vk, scan: 0, u_char: u, ctrl_state })
 }
 
 fn key(c: char, modifiers: KeyModifiers, kind: KeyEventKind) -> Verdict {
