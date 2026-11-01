@@ -690,7 +690,7 @@ Key names for `bind-key` and `send-keys`:
 | Shift+Enter | `S-Enter` (sends proper escape sequence) |
 | Shift+Tab | `BTab` (sends `ESC [ Z`) |
 | Ctrl+Backspace | `C-BSpace` (writes `0x08`, the native Windows encoding, so PSReadLine runs BackwardKillWord; `M-BSpace` writes `ESC 0x7f`). A terminal that sends a bare `0x08` for Ctrl+Backspace is seen as `C-h`, which is also what tmux reports for it |
-| Non-ASCII keys | Any single Unicode character: `ы`, `é`, `ß`, with the usual modifiers (`M-ф`, `C-ы`, `S-ы`). `list-keys` prints the character as typed |
+| Non-ASCII keys | Any single Unicode character: `ы`, `é`, `ß`, with the usual modifiers (`M-ф`, `C-ы`, `S-ы`). `list-keys` prints the character as typed. Ctrl plus a non Latin letter with no binding of its own falls back to the Latin key of the same physical key: on a Russian layout an unbound `C-ы` runs a `C-s` binding, reaches the pane as Ctrl+S, and Ctrl+и arms a `C-b` prefix |
 | Mouse key names | tmux's mouse names (`WheelUpPane`, `MouseDown1Pane`, `MouseDrag1Border`, `DoubleClick1Pane`, `WheelDownStatus`, and so on, with `C-`, `M-` and `S-`) are real keys: `bind`, `unbind` and `list-keys` take them. The wheel over a pane runs them (see [Mouse key bindings](#mouse-key-bindings)); the other mouse names are stored and listed but psmux's built-in mouse handling still acts on clicks, drags and the status line. `Any`, `None`, `Mouse`, `FocusIn`/`FocusOut`, `PasteStart`/`PasteEnd` and `UserN` are accepted so a ported tmux config loads, but psmux does not act on them |
 
 Aliases are accepted for several of these: `Return` for `Enter`, `Esc` for `Escape`,

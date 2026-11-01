@@ -4311,6 +4311,17 @@ pub(crate) fn is_meta_escape_name(name: &str) -> bool {
 }
 
 pub fn send_key_to_active(app: &mut AppState, k: &str) -> io::Result<()> {
+    send_key_to_active_with(app, k, crate::confirm::layout_virtual_key)
+}
+
+/// `send_key_to_active` with the keyboard layout lookup passed in, as the
+/// #616 confirm prompt takes it (`confirm::is_yes_with`), so the Ctrl + non
+/// Latin letter rule can be tested without the layouts of the machine.
+pub(crate) fn send_key_to_active_with(
+    app: &mut AppState,
+    k: &str,
+    virtual_key: fn(char) -> Option<u16>,
+) -> io::Result<()> {
     // In clock mode, any key exits back to passthrough
     if matches!(app.mode, Mode::ClockMode) {
         app.mode = Mode::Passthrough;
@@ -4469,7 +4480,7 @@ pub fn send_key_to_active(app: &mut AppState, k: &str) -> io::Result<()> {
             other => PromptKey::Named(other),
         };
         if feed(app, pk) == Fed::Reprocess && app.mode.in_copy() {
-            return send_key_to_active(app, k);
+            return send_key_to_active_with(app, k, virtual_key);
         }
         return Ok(());
     }
@@ -4508,13 +4519,20 @@ pub fn send_key_to_active(app: &mut AppState, k: &str) -> io::Result<()> {
         // missing. `k` is a canonical key NAME here ("escape", "C-v", ...), so
         // it goes back through the same parser the config used to produce the
         // table's keys — that keeps one definition of what a key name means.
-        if let Some((code, mods)) = crate::config::parse_key_string(k) {
-            if let Some(action) = copy_mode_binding(app, (code, mods)) {
-                if run_copy_mode_binding(app, &action) {
-                    return Ok(());
-                }
+        // A Ctrl + non Latin letter with no binding of its own is looked up
+        // as the Latin key it is typed on: the exact name wins.
+        let latin = crate::config::latin_ctrl_name_with(k, virtual_key);
+        let bound = std::iter::once(k)
+            .chain(latin.as_deref())
+            .find_map(|name| crate::config::parse_key_string(name).and_then(|key| copy_mode_binding(app, key)));
+        if let Some(action) = bound {
+            if run_copy_mode_binding(app, &action) {
+                return Ok(());
             }
         }
+        // The built-in keys below are tmux's default copy mode bindings, so
+        // they take the Latin key too: on Russian, Ctrl+м is C-v.
+        let k = latin.as_deref().unwrap_or(k);
         // A numeric prefix typed before one of these keys repeats the motion,
         // and ANY key consumes the pending count so it cannot leak into the
         // next one.  tmux runs the whole motion `wme->prefix` times
@@ -4908,6 +4926,15 @@ pub fn send_key_to_active(app: &mut AppState, k: &str) -> io::Result<()> {
         }
         let _ = p.writer.flush();
     }
+
+    // Ctrl + a non Latin letter reaches the program as Ctrl + the Latin
+    // letter of the same physical key, the bytes and records an English
+    // layout gives (Ctrl+м on Russian is Ctrl+V), the Ctrl+C interrupt route
+    // included. Before, `C-м` matched no arm below and was dropped. The
+    // client looked the key up under its own name first, so a binding on
+    // `C-м` never gets here.
+    let latin = crate::config::latin_ctrl_name_with(k, virtual_key);
+    let k = latin.as_deref().unwrap_or(k);
 
     // select-pane -d (tmux PANE_INPUTOFF): past the mode routing, so this key
     // is for the program.  Checked before `write_named_key_to_pane`, whose

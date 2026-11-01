@@ -3010,6 +3010,62 @@ pub fn normalize_key_for_binding(key: (KeyCode, KeyModifiers)) -> (KeyCode, KeyM
     }
 }
 
+/// The Latin key a Ctrl + non Latin letter is typed on: on Russian,
+/// Ctrl+ы is typed on the S key and stands for `C-s`. `None` for any other
+/// key, which keeps its own name only.
+pub fn latin_ctrl_key(key: (KeyCode, KeyModifiers)) -> Option<(KeyCode, KeyModifiers)> {
+    latin_ctrl_key_with(key, crate::confirm::layout_virtual_key)
+}
+
+/// `latin_ctrl_key` with the keyboard layout lookup passed in, as the #616
+/// confirm prompt takes it (`confirm::is_yes_with`), so the rule can be
+/// tested without the layouts of the machine it runs on.
+///
+/// Only Ctrl (Shift allowed, no Alt: Ctrl+Alt is AltGr) on a letter outside
+/// the Latin script whose key is one of VK_A to VK_Z. Windows names those
+/// keys by their Latin letter in every layout (VK_S is 0x53). A Latin script
+/// letter (Turkish `ı` is on VK_I) is what it says it is.
+pub fn latin_ctrl_key_with(
+    key: (KeyCode, KeyModifiers),
+    virtual_key: impl Fn(char) -> Option<u16>,
+) -> Option<(KeyCode, KeyModifiers)> {
+    let (KeyCode::Char(c), mods) = key else { return None };
+    if mods.difference(KeyModifiers::SHIFT) != KeyModifiers::CONTROL || !c.is_alphabetic() || is_latin_script(c) {
+        return None;
+    }
+    let vk = virtual_key(c)?;
+    if !(0x41..=0x5A).contains(&vk) {
+        return None;
+    }
+    let letter = vk as u8 as char;
+    // The case the layout typed, as crossterm cases a Latin letter.
+    let letter = if c.is_uppercase() { letter } else { letter.to_ascii_lowercase() };
+    Some((KeyCode::Char(letter), mods))
+}
+
+/// ASCII and the Latin blocks of Unicode: Latin-1 Supplement through IPA
+/// Extensions, Latin Extended Additional, C, D and E, and the fullwidth forms.
+fn is_latin_script(c: char) -> bool {
+    matches!(c, '\0'..='\u{7F}' | '\u{C0}'..='\u{2AF}' | '\u{1E00}'..='\u{1EFF}'
+        | '\u{2C60}'..='\u{2C7F}' | '\u{A720}'..='\u{A7FF}' | '\u{AB30}'..='\u{AB6F}'
+        | '\u{FF21}'..='\u{FF3A}' | '\u{FF41}'..='\u{FF5A}')
+}
+
+/// The send-key name of the Latin key a Ctrl + non Latin letter name stands
+/// for, in the spelling the client sends for the Latin key: `C-м` on Russian is
+/// `C-v`, `C-S-Ы` is `C-S-s`. `None` for every other name.
+pub fn latin_ctrl_name_with(name: &str, virtual_key: impl Fn(char) -> Option<u16>) -> Option<String> {
+    // Every name the rule can take holds a non ASCII letter, so ordinary
+    // keys never reach the parser or the layout lookup.
+    if name.is_ascii() {
+        return None;
+    }
+    let (KeyCode::Char(c), mods) = latin_ctrl_key_with(parse_key_string(name)?, virtual_key)? else {
+        return None;
+    };
+    Some(format_key_binding(&(KeyCode::Char(c.to_ascii_lowercase()), mods)))
+}
+
 /// Map a multi-character key name (case-insensitive) to a KeyCode.
 /// Returns None if the name is not recognized.
 fn named_key(name: &str) -> Option<KeyCode> {
@@ -4796,6 +4852,10 @@ mod tests_issue606_repeat_time;
 #[cfg(test)]
 #[path = "../tests-rs/test_issue616_unicode_bind.rs"]
 mod tests_issue616_unicode_bind;
+
+#[cfg(all(test, windows))]
+#[path = "../tests-rs/test_ctrl_non_latin_layout.rs"]
+mod tests_ctrl_non_latin_layout;
 
 #[cfg(test)]
 #[path = "../tests-rs/test_issue619_set_option_unset_only.rs"]
