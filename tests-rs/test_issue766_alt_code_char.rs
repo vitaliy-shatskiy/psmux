@@ -8,7 +8,7 @@ use super::*;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
 fn rec(key_down: bool, vk: u16, u_char: u16, ctrl_state: u32) -> Option<KeyRec> {
-    Some(KeyRec { key_down, vk, u_char, ctrl_state })
+    Some(KeyRec { key_down, vk, scan: 0, u_char, ctrl_state })
 }
 
 fn press_char(c: char) -> Event {

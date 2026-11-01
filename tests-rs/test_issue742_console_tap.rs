@@ -9,13 +9,13 @@ use super::*;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
 fn down(u: u16) -> Option<KeyRec> {
-    Some(KeyRec { key_down: true, vk: 0, u_char: u, ctrl_state: 0 })
+    Some(KeyRec { key_down: true, vk: 0, scan: 0, u_char: u, ctrl_state: 0 })
 }
 fn up(u: u16) -> Option<KeyRec> {
-    Some(KeyRec { key_down: false, vk: 0, u_char: u, ctrl_state: 0 })
+    Some(KeyRec { key_down: false, vk: 0, scan: 0, u_char: u, ctrl_state: 0 })
 }
 fn keyed(down_: bool, vk: u16, u: u16, ctrl_state: u32) -> Option<KeyRec> {
-    Some(KeyRec { key_down: down_, vk, u_char: u, ctrl_state })
+    Some(KeyRec { key_down: down_, vk, scan: 0, u_char: u, ctrl_state })
 }
 fn ch(c: char) -> Event {
     Event::Key(KeyEvent { code: KeyCode::Char(c), modifiers: KeyModifiers::empty(), kind: KeyEventKind::Press, state: KeyEventState::empty() })

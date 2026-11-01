@@ -29,7 +29,7 @@ use super::*;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
 fn keyed(down_: bool, vk: u16, u: u16, ctrl_state: u32) -> Option<KeyRec> {
-    Some(KeyRec { key_down: down_, vk, u_char: u, ctrl_state })
+    Some(KeyRec { key_down: down_, vk, scan: 0, u_char: u, ctrl_state })
 }
 fn ch(c: char) -> Event {
     Event::Key(KeyEvent { code: KeyCode::Char(c), modifiers: KeyModifiers::empty(), kind: KeyEventKind::Press, state: KeyEventState::empty() })
@@ -70,8 +70,8 @@ fn trace(tap: &mut ConsoleTap, recs: &[Option<KeyRec>]) -> Vec<Step> {
     out
 }
 
-const ALTGR_DOWN: Option<KeyRec> = Some(KeyRec { key_down: true, vk: 0x12, u_char: 0, ctrl_state: 0x0109 });
-const ALTGR_UP: Option<KeyRec> = Some(KeyRec { key_down: false, vk: 0x12, u_char: 0, ctrl_state: 0x0100 });
+const ALTGR_DOWN: Option<KeyRec> = Some(KeyRec { key_down: true, vk: 0x12, scan: 0, u_char: 0, ctrl_state: 0x0109 });
+const ALTGR_UP: Option<KeyRec> = Some(KeyRec { key_down: false, vk: 0x12, scan: 0, u_char: 0, ctrl_state: 0x0100 });
 
 #[test]
 fn the_measured_turkish_q_paste_of_i_is_the_letter_i() {
