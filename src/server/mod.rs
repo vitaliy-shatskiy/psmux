@@ -9086,6 +9086,10 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
             // All of it goes through the one guarded helper — this block used to
             // carry its own copy of the list WITHOUT the async guard, which is
             // what made every keystroke wait on a status-bar #() spawn.
+            // The pane titles first: a client fed by pushes sends no
+            // dump-state, the only other place they are taken from the parser,
+            // so set-titles kept the old title while the pane kept printing.
+            helpers::propagate_osc_titles(&mut app);
             let sf = helpers::expand_status_formats(&app, &cached_status_style);
             let ss_escaped = json_escape_string(&sf.status_style);
             let sl_expanded = json_escape_string(&sf.status_left);

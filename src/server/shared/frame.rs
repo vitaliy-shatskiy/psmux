@@ -66,6 +66,8 @@ fn build_frame(app: &mut AppState, c: &mut FrameCache, meta_dirty: &mut bool) ->
     }
     let layout_json = dump_layout_json_fast(app)?;
     c.combined_buf.clear();
+    // A pushed frame too: a client fed by pushes sends no dump-state.
+    helpers::propagate_osc_titles(app);
     let sf = helpers::expand_status_formats(app, &c.cached_status_style);
     let ss_escaped = json_escape_string(&sf.status_style);
     let sl_expanded = json_escape_string(&sf.status_left);
@@ -352,3 +354,7 @@ fn auto_rename_windows(app: &mut AppState) -> bool {
 #[cfg(test)]
 #[path = "../../../tests-rs/test_issue431_shared_frame.rs"]
 mod test_issue431_shared_frame;
+
+#[cfg(test)]
+#[path = "../../../tests-rs/test_frame_pane_title.rs"]
+mod test_frame_pane_title;
