@@ -78,7 +78,10 @@ class ConTitle {
 }
 '@)
 & $csc /nologo /platform:x64 "/out:$titleExe" $titleSrc 2>&1 | Out-Null
-if (-not (Test-Path $titleExe)) { Write-Host "could not build the console title reader"; exit 2 }
+if (-not (Test-Path $titleExe)) {
+    Remove-Item -LiteralPath $work -Recurse -Force -EA SilentlyContinue
+    Write-Host "could not build the console title reader"; exit 2
+}
 
 # ── the pane program ─────────────────────────────────────────────────────────
 # A script file: an inline -Command would have its `$` expanded on the way in.

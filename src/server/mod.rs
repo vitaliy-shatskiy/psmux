@@ -9058,6 +9058,13 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
         let owe_push = (state_dirty || meta_dirty) && crate::types::has_frame_receivers();
         push_deferred = owe_push && pty_batch_pending;
         if owe_push && !pty_batch_pending {
+            // The pane titles first, before the layout is dumped: a client
+            // fed by pushes sends no dump-state, the only other place they
+            // are taken from the parser, and the layout carries each pane's
+            // title for the pane border.
+            if helpers::propagate_osc_titles(&mut app) {
+                meta_dirty = true;
+            }
             // Check bell/activity state for the pushed frame
             let push_alerts = helpers::check_window_activity(&mut app);
             if push_alerts.flags_changed {
@@ -9086,10 +9093,6 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
             // All of it goes through the one guarded helper — this block used to
             // carry its own copy of the list WITHOUT the async guard, which is
             // what made every keystroke wait on a status-bar #() spawn.
-            // The pane titles first: a client fed by pushes sends no
-            // dump-state, the only other place they are taken from the parser,
-            // so set-titles kept the old title while the pane kept printing.
-            helpers::propagate_osc_titles(&mut app);
             let sf = helpers::expand_status_formats(&app, &cached_status_style);
             let ss_escaped = json_escape_string(&sf.status_style);
             let sl_expanded = json_escape_string(&sf.status_left);

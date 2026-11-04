@@ -29,5 +29,21 @@ fn a_frame_carries_the_title_the_pane_set_since_the_last_frame() {
         let frame: serde_json::Value =
             serde_json::from_str(&cache.combined_buf).expect("the frame is JSON");
         assert_eq!(frame["host_title"], title, "the frame's host title");
+        // The pane border draws the layout's title, a cached frame is all an
+        // idle client sees: both titles must come from the same parse.
+        let mut titles = Vec::new();
+        collect_pane_titles(&frame["layout"], &mut titles);
+        assert_eq!(titles, [title], "the pane title inside the frame's layout");
+    }
+}
+
+fn collect_pane_titles<'a>(node: &'a serde_json::Value, out: &mut Vec<&'a str>) {
+    if let Some(title) = node["title"].as_str() {
+        out.push(title);
+    }
+    if let Some(children) = node["children"].as_array() {
+        for child in children {
+            collect_pane_titles(child, out);
+        }
     }
 }

@@ -52,6 +52,11 @@ impl FrameCache {
 /// DumpState arm (the push path builds the same object without
 /// `defaults_suppressed`; the client reads either).
 fn build_frame(app: &mut AppState, c: &mut FrameCache, meta_dirty: &mut bool) -> io::Result<()> {
+    // The pane titles first, before the layout is dumped: a client fed by
+    // pushes sends no dump-state, and the layout carries each pane's title.
+    if helpers::propagate_osc_titles(app) {
+        *meta_dirty = true;
+    }
     // Rebuild metadata cache if structural changes happened.
     if *meta_dirty {
         c.cached_windows_json = list_windows_json_with_tabs(app)?;
@@ -66,8 +71,6 @@ fn build_frame(app: &mut AppState, c: &mut FrameCache, meta_dirty: &mut bool) ->
     }
     let layout_json = dump_layout_json_fast(app)?;
     c.combined_buf.clear();
-    // A pushed frame too: a client fed by pushes sends no dump-state.
-    helpers::propagate_osc_titles(app);
     let sf = helpers::expand_status_formats(app, &c.cached_status_style);
     let ss_escaped = json_escape_string(&sf.status_style);
     let sl_expanded = json_escape_string(&sf.status_left);
